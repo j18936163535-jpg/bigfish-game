@@ -31,7 +31,7 @@ const f = (
   size,
   speed,
   behavior,
-  sprite: `/assets/fish/${id}.png`,
+  sprite: `assets/fish/${id}.png`,
   facing: 'left', // 美术统一面朝左出图
   coins,
   score,

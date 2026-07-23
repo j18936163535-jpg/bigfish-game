@@ -23,7 +23,7 @@ export interface HomeScreenProps {
 }
 
 const fishImg = (sprite: string): string =>
-  sprite.startsWith('/') ? sprite : `/assets/fish/${sprite}.png`;
+  sprite.includes('/') ? sprite : `assets/fish/${sprite}.png`;
 
 export default function HomeScreen(props: HomeScreenProps) {
   const {
@@ -79,7 +79,7 @@ export default function HomeScreen(props: HomeScreenProps) {
       />
       {bgOk && (
         <img
-          src="/assets/ui/bg-home.png"
+          src="assets/ui/bg-home.png"
           alt=""
           draggable={false}
           className="absolute inset-0 h-full w-full object-cover"

@@ -136,7 +136,7 @@ export default function ChestModal({ chest, onDone }: ChestModalProps) {
         >
           {imgOk ? (
             <img
-              src={`/assets/ui/chest_${chest.rarity}.png`}
+              src={`assets/ui/chest_${chest.rarity}.png`}
               alt={style.name}
               draggable={false}
               className="h-28 w-28 object-contain"
