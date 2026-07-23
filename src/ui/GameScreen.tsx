@@ -118,11 +118,12 @@ export default function GameScreen(props: GameScreenProps) {
   return (
     <div className="fixed inset-0 overflow-hidden bg-[#081c26]">
       <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
-      {/* 虚拟摇杆宿主：左下安全区内，Joystick 类在其中自建 DOM */}
+      {/* 虚拟摇杆宿主：左下安全区内，Joystick 类在其中自建 DOM
+          （底盘 132px 视觉 + 164px 透明热区 + 14px 内缩，需 ≥178px） */}
       <div
         ref={joyRef}
-        className="safe-bottom safe-left absolute bottom-6 left-4"
-        style={{ width: 120, height: 120 }}
+        className="safe-bottom safe-left pointer-events-none absolute bottom-6 left-4"
+        style={{ width: 184, height: 184, touchAction: 'none' }}
       />
       {hud && (
         <GameHud

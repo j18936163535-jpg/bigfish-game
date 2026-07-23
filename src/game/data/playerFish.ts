@@ -24,9 +24,9 @@ export const playerFish: PlayerFishSpec[] = [
       id: 'dash',
       name: '猛冲',
       icon: '💨',
-      desc: '0.7秒内移动速度×2.6',
+      desc: '瞬间爆发冲刺：初速约4.5倍，0.9秒内衰减回正常',
       cooldown: 5,
-      duration: 0.7,
+      duration: 0.9,
     },
     // 无被动（表中为「—」）
   },

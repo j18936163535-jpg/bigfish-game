@@ -53,6 +53,14 @@ export default function GameHud({
   const cdSec = Math.ceil(hud.skill.cd);
   const tierPct = Math.round(Math.max(0, Math.min(1, hud.progress)) * 100);
 
+  // 触控可靠触发：onPointerDown 立即响应（不受触屏 click 延迟 /
+  // 多指 / pointer capture 影响），stopPropagation 防穿透到 canvas。
+  const press = (fn: () => void) => (e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    fn();
+  };
+
   return (
     <div className="pointer-events-none absolute inset-0 z-20">
       <style>{CSS}</style>
@@ -63,10 +71,10 @@ export default function GameHud({
           <button
             type="button"
             className="hud-pause pointer-events-auto"
-            onClick={() => {
+            onPointerDown={press(() => {
               audio.play('ui');
               onPause();
-            }}
+            })}
           >
             ⏸
           </button>
@@ -146,7 +154,7 @@ export default function GameHud({
           <button
             type="button"
             className="hud-bomb"
-            onClick={onUseBomb}
+            onPointerDown={press(onUseBomb)}
             title="引爆炸弹"
           >
             💣
@@ -158,7 +166,7 @@ export default function GameHud({
           className={`hud-skill ${hud.skill.active ? 'hud-skill-active' : ''} ${
             cdFrac > 0 ? '' : 'hud-skill-ready'
           }`}
-          onClick={onUseSkill}
+          onPointerDown={press(onUseSkill)}
           title="技能"
         >
           <span className="text-2xl" aria-hidden>
@@ -189,20 +197,20 @@ export default function GameHud({
           <button
             type="button"
             className="hud-menu-primary"
-            onClick={() => {
+            onPointerDown={press(() => {
               audio.play('ui');
               onResume();
-            }}
+            })}
           >
             ▶ 继续游戏
           </button>
           <button
             type="button"
             className="hud-menu-danger"
-            onClick={() => {
+            onPointerDown={press(() => {
               audio.play('ui');
               onQuit();
-            }}
+            })}
           >
             🏳️ 结束本局
           </button>
@@ -213,7 +221,24 @@ export default function GameHud({
 }
 
 const CSS = `
+/* 局内所有按钮：触控优化 —— 禁手势抢占、禁选中、禁长按弹窗 */
+.hud-pause, .hud-skill, .hud-bomb, .hud-menu-primary, .hud-menu-danger {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+/* 视觉尺寸不变、透明热区外扩到 ≥56px（暂停 40px→56px，炸弹 46px→58px） */
+.hud-pause::before, .hud-bomb::before {
+  content: '';
+  position: absolute;
+  inset: -8px;
+  border-radius: 9999px;
+}
+
 .hud-pause {
+  position: relative;
   display: flex; align-items: center; justify-content: center;
   width: 2.5rem; height: 2.5rem; border-radius: 9999px;
   background: rgba(0,0,0,.3); backdrop-filter: blur(4px);

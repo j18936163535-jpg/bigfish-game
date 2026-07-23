@@ -13,7 +13,7 @@ export interface AiCtx {
   playerVisible: boolean;       // 隐身技能期间为 false（大鱼完全丢失目标）
   canPlayerEat: (n: Npc) => boolean;
   lure: number;                 // >0：诱光半径（可吃鱼被吸引游向玩家）
-  magnet: number;               // >0：磁铁半径（1-2 档小鱼被吸向玩家）
+  magnet: number;               // >0：磁铁半径（可吃的小鱼被吸向玩家，入口即被吃）
   vortex: number;               // >0：吞噬漩涡半径（可吃鱼被直接吸入）
   hourglass: boolean;           // 沙漏：全场鱼速 -55%
   chaseRange: number;           // chase 感知圈（≈420px，由场景按宽限/tier 缩放）
@@ -60,10 +60,13 @@ export function updateNpc(n: Npc, dt: number, c: AiCtx, rand: () => number): voi
     return;
   }
 
-  // 磁铁：1-2 档小鱼被吸向玩家
-  if (c.magnet > 0 && n.spec.tier <= 2 && dist < c.magnet) {
-    n.x += (ux * 280 + n.vx) * dt;
-    n.y += (uy * 280 + n.vy) * dt;
+  // 磁铁：可吃的小鱼被吸向玩家（根因修复：原条件只看 tier≤2，
+  // 不可吃的鱼被吸到玩家身上永远吃不掉还会跑掉；现在只吸可吃鱼，
+  // 且越近吸得越快，进吞食判定圈立刻被 contacts() 吃掉）
+  if (c.magnet > 0 && edible && dist < c.magnet) {
+    const pull = 280 + (1 - Math.min(1, dist / c.magnet)) * 260;
+    n.x += (ux * pull + n.vx) * dt;
+    n.y += (uy * pull + n.vy) * dt;
     n.dir = Math.atan2(uy, ux);
     n.phase += dt * 6;
     return;

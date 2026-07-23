@@ -73,6 +73,22 @@ export class FxPool {
     }
   }
 
+  /** 速度线拖尾：粒子沿 (dx,dy) 方向飞出，用于猛冲的冲刺流线 */
+  streak(x: number, y: number, color: string, dx: number, dy: number, n = 3, speed = 130, life = 0.3, size = 2.2): void {
+    for (let i = 0; i < n; i++) {
+      const p = this.next();
+      const jx = (rand() - 0.5) * 0.6;
+      const jy = (rand() - 0.5) * 0.6;
+      const sp = speed * (0.6 + rand() * 0.7);
+      p.alive = true; p.kind = 'dot';
+      p.x = x + jx * 14; p.y = y + jy * 14;
+      p.vx = (dx + jx) * sp; p.vy = (dy + jy) * sp;
+      p.life = p.maxLife = life * (0.7 + rand() * 0.6);
+      p.size = size * (0.7 + rand() * 0.6); p.growth = 0;
+      p.color = color;
+    }
+  }
+
   /** 扩散圆环（升级/爆炸/技能） */
   ring(x: number, y: number, color: string, maxR = 120, life = 0.5): void {
     const p = this.next();

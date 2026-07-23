@@ -44,8 +44,21 @@ const SPIKES_T = 3;
 const CLOAK_T = 4;
 const VORTEX_R = 400;
 const VORTEX_T = 1.6;
-const DASH_T = 0.7;
-const DASH_MUL = 2.6;
+// 猛冲重做（QA 手感）：按下瞬间 4.5× 初速冲量，DASH_T 内指数衰减回正常
+const DASH_T = 0.9;
+const DASH_BOOST = 3.5;      // 正常速度之外附加的初速倍率（合计 ≈4.5×）
+const DASH_DECAY = 3.2;      // 指数衰减系数：0.9s 末附加速度≈0.2×
+const DASH_ZOOM = 0.07;      // 冲刺推镜幅度
+// 相机变焦曲线（QA 手感）：T1 ≈2.9（T1 玩家鱼在 390×844 屏上视觉直径≥90px），
+// 指数平滑过渡到 T8 ≈0.45（高 tier 视野不变），以 390px 短边为基准缩放。
+const ZOOM_T1 = 2.9;
+const ZOOM_T8 = 0.45;
+const ZOOM_BASE_SHORT = 390;
+// 升档阈值分段提速（QA 手感：低 tier 明显加快，高 tier 不变）：
+// 阈值 = TIER_SIZE[t]² × TIER_UP_MASS_FACTOR × TIER_THRESHOLD_MUL[t]
+const TIER_THRESHOLD_MUL: Record<Tier, number> = {
+  1: 1, 2: 0.85, 3: 0.65, 4: 0.85, 5: 1, 6: 1, 7: 1, 8: 1,
+};
 const BOMB_R = 380;
 const BOMB_STUN = 4;
 const MAGNET_T = 8;
@@ -141,6 +154,10 @@ export class GameScene {
   private skillCd = 0;
   private skillCdMax = 1;
   private dashT = 0;
+  private dashDx = 1;
+  private dashDy = 0;
+  private dashZoomT = 0;
+  private dashTrailT = 0;
   private lureT = 0;
   private spikesT = 0;
   private cloakT = 0;
@@ -203,7 +220,8 @@ export class GameScene {
     this.revives = this.opts.mods.revives;
     this.invulnT = 0; this.dead = false; this.deathT = 0; this.chewT = 0;
     this.skillCd = 0; this.skillCdMax = Math.max(0.1, this.opts.player.skill.cooldown * this.opts.mods.cdMul);
-    this.dashT = 0; this.lureT = 0; this.spikesT = 0; this.cloakT = 0; this.vortexT = 0;
+    this.dashT = 0; this.dashZoomT = 0; this.dashTrailT = 0;
+    this.lureT = 0; this.spikesT = 0; this.cloakT = 0; this.vortexT = 0;
     this.rainbowT = 0; this.magnetT = 0; this.hourglassT = 0; this.goldrushT = 0;
     this.comboN = 0; this.comboT = 0;
     this.npcs = []; this.pickups = []; this.orbs = [];
@@ -232,15 +250,27 @@ export class GameScene {
     // QA 实测钩子（仅 URL 带 ?qa=1 时启用）：只读快照，供无头测试脚本
     // 采样玩家/NPC 位置以模拟"会追小鱼、会躲大鱼"的中等水平操作。
     if (typeof window !== 'undefined' && /[?&]qa=1\b/.test(window.location.search)) {
-      (window as unknown as { __qa?: { snap(): unknown } }).__qa = {
+      (window as unknown as { __qa?: { snap(): unknown; give(id: string): boolean } }).__qa = {
         snap: () => ({
           px: this.px, py: this.py, size: this.size, tier: this.tier,
           runTime: Math.round(this.runTime * 10) / 10,
           dead: this.dead, kills: this.kills, score: this.score,
+          // 手感实测扩展（只读）：速度 / dash 与磁铁计时 / 相机变焦
+          pvx: Math.round(this.pvx), pvy: Math.round(this.pvy),
+          dashT: Math.round(this.dashT * 100) / 100,
+          magnetT: Math.round(this.magnetT * 10) / 10,
+          zoom: Math.round(this.cam.zoom * 1000) / 1000,
           npcs: this.npcs
             .filter((n) => !n.dead && n.eaten < 0)
             .map((n) => ({ x: Math.round(n.x), y: Math.round(n.y), size: Math.round(n.size * 10) / 10 })),
         }),
+        // 测试注入：按道具 id 直接触发（磁铁吃鱼回归测试用），仅 ?qa=1 生效
+        give: (id: string) => {
+          const def = ALL_PICKUPS.find((d) => d.id === id);
+          if (!def) return false;
+          this.applyPickup(def);
+          return true;
+        },
       };
     }
 
@@ -297,6 +327,7 @@ export class GameScene {
     this.chewT = Math.max(0, this.chewT - dt);
     this.skillCd = Math.max(0, this.skillCd - dt);
     this.dashT = Math.max(0, this.dashT - dt);
+    this.dashZoomT = Math.max(0, this.dashZoomT - dt);
     this.lureT = Math.max(0, this.lureT - dt);
     this.spikesT = Math.max(0, this.spikesT - dt);
     this.cloakT = Math.max(0, this.cloakT - dt);
@@ -399,7 +430,6 @@ export class GameScene {
     const sizeFactor = Math.pow(TIER_SIZE[1] / Math.max(8, this.size), 0.18);
     let sp = this.opts.player.baseSpeed * this.opts.mods.speedMul * sizeFactor;
     if (this.opts.player.id === 'volt') sp *= 1.08;      // 电光被动：移速+8%
-    if (this.dashT > 0) sp *= DASH_MUL;                  // 猛冲 2.6×
     if (this.rainbowT > 0) sp *= 1.15;
 
     const k = 1 - Math.exp(-8 * dt);
@@ -407,6 +437,24 @@ export class GameScene {
     this.pvy += (iv.y * sp - this.pvy) * k;
     this.px += this.pvx * dt;
     this.py += this.pvy * dt;
+
+    // 猛冲冲量：按下瞬间附加 3.5× 方向初速（合计≈4.5×），0.9s 内指数衰减回正常
+    if (this.dashT > 0) {
+      const elapsed = DASH_T - this.dashT;
+      const boost = DASH_BOOST * Math.exp(-DASH_DECAY * elapsed);
+      this.px += this.dashDx * sp * boost * dt;
+      this.py += this.dashDy * sp * boost * dt;
+      // 速度线拖尾：逆运动方向的流线粒子
+      this.dashTrailT -= dt;
+      if (this.dashTrailT <= 0 && boost > 0.5) {
+        this.dashTrailT = 0.026;
+        this.fx.streak(
+          this.px - this.dashDx * this.size * 1.1,
+          this.py - this.dashDy * this.size * 1.1,
+          '#dff3f6', -this.dashDx, -this.dashDy, 3, 130, 0.32, 2.2,
+        );
+      }
+    }
 
     if (Math.hypot(this.pvx, this.pvy) > 12) {
       this.ang = Math.atan2(this.pvy, this.pvx); // 朝向跟随移动方向
@@ -496,11 +544,16 @@ export class GameScene {
     if (n.spec.special === 'rainbow') this.startFrenzy();
   }
 
+  /** 升到 tier t 所需质量阈值（低 tier 分段提速，见 TIER_THRESHOLD_MUL） */
+  private tierThreshold(t: Tier): number {
+    return TIER_SIZE[t] * TIER_SIZE[t] * TIER_UP_MASS_FACTOR * TIER_THRESHOLD_MUL[t];
+  }
+
   private addMass(m: number): void {
     this.mass += m;
     while (this.tier < 8) {
       const next = (this.tier + 1) as Tier;
-      if (this.mass < TIER_SIZE[next] * TIER_SIZE[next] * TIER_UP_MASS_FACTOR) break;
+      if (this.mass < this.tierThreshold(next)) break;
       this.tier = next;
       if (this.tier > this.maxTier) this.maxTier = this.tier;
       this.targetSize = TIER_SIZE[this.tier];
@@ -515,7 +568,7 @@ export class GameScene {
   private retier(): void {
     let nt: Tier = 1;
     for (let t = 8; t >= 1; t--) {
-      if (this.mass >= TIER_SIZE[t as Tier] * TIER_SIZE[t as Tier] * TIER_UP_MASS_FACTOR) {
+      if (this.mass >= this.tierThreshold(t as Tier)) {
         nt = t as Tier;
         break;
       }
@@ -647,10 +700,27 @@ export class GameScene {
     if (this.skillCd > 0) return;
     const sk = this.opts.player.skill;
     switch (sk.id) {
-      case 'dash': // 猛冲：0.7s 内 2.6× 移速
+      case 'dash': { // 猛冲：瞬间方向冲量（≈4.5× 初速，0.9s 指数衰减）
+        const iv = this.inputVector();
+        const len = Math.hypot(iv.x, iv.y);
+        if (len > 0.2) {
+          this.dashDx = iv.x / len;
+          this.dashDy = iv.y / len;
+        } else {
+          this.dashDx = Math.cos(this.ang);
+          this.dashDy = Math.sin(this.ang);
+        }
         this.dashT = sk.duration ?? DASH_T;
-        audio.play('dash');
+        this.dashZoomT = this.dashT;
+        this.dashTrailT = 0;
+        this.shake(0.16, 3.5);
+        this.fx.burst(
+          this.px - this.dashDx * this.size, this.py - this.dashDy * this.size,
+          '#dff3f6', 10, 190, 0.4, 2.6,
+        );
+        audio.play('dash'); // whoosh：按下瞬间即触发
         break;
+      }
       case 'shock': { // 电弧：220px 内可吃鱼麻痹 2.5s
         let hit = false;
         for (const n of this.npcs) {
@@ -779,9 +849,29 @@ export class GameScene {
   // ===========================================================
   // 生成：NPC 生成环 + 道具漂浮
   // ===========================================================
+  /** 抽一条玩家当前可吃的口粮鱼（低 tier 保底用）：体型上限确保生成后可吃 */
+  private pickFoodSpec(randFn: () => number = Math.random): typeof ALL_SPECS[number] | null {
+    const pool = ALL_SPECS.filter(
+      (s) => s.special !== 'rainbow' && s.tier <= this.tier && s.size * 1.1 < this.size * EAT_RATIO,
+    );
+    if (pool.length === 0) return null;
+    return pool[Math.floor(randFn() * pool.length)];
+  }
+
+  private spawnFoodNear(minR: number, maxR: number): void {
+    const spec = this.pickFoodSpec();
+    if (!spec) return;
+    const a = Math.random() * Math.PI * 2;
+    const r = minR + Math.random() * (maxR - minR);
+    this.npcs.push(makeNpc(
+      spec, this.px + Math.cos(a) * r, this.py + Math.sin(a) * r,
+      { minMul: 0.7, maxMul: 0.9 },
+    ));
+  }
+
   private initialSpawn(): void {
     let guard = 0;
-    while (this.npcs.length < 24 && guard++ < 300) {
+    while (this.npcs.length < 30 && guard++ < 300) {
       const spec = pickSpec(this.tier, 0, this.opts.mods.rainbowMul);
       if (!spec) break;
       const a = Math.random() * Math.PI * 2;
@@ -799,6 +889,11 @@ export class GameScene {
         ));
       }
     }
+    // QA 手感：相机放大后视野很小（T1 可见半径≈70×150 世界px），
+    // 开局口粮必须有一部分直接在视野内，另一部分在紧邻外圈
+    for (let i = 0; i < 3; i++) this.spawnFoodNear(80, 150);
+    for (let i = 0; i < 4; i++) this.spawnFoodNear(150, 280);
+    for (let i = 0; i < 3; i++) this.spawnFoodNear(280, 500);
   }
 
   private spawnTick(dt: number): void {
@@ -814,6 +909,19 @@ export class GameScene {
     const a = Math.random() * Math.PI * 2;
     const r = SPAWN_AHEAD + Math.random() * 350;
     this.npcs.push(makeNpc(spec, this.px + Math.cos(a) * r, this.py + Math.sin(a) * r));
+
+    // QA 手感：低 tier 近场口粮保底——相机放大后视野小，
+    // 380px 内可吃鱼少于 4 条时持续补投到视野边缘（每次 1 条，避免爆屏）
+    if (this.tier <= 2) {
+      let nearFood = 0;
+      for (const n of this.npcs) {
+        if (n.dead || n.eaten >= 0) continue;
+        const dx = n.x - this.px;
+        const dy = n.y - this.py;
+        if (dx * dx + dy * dy < 380 * 380 && this.canEat(n)) nearFood++;
+      }
+      if (nearFood < 4 && alive < MAX_NPC) this.spawnFoodNear(140, 340);
+    }
   }
 
   private pickupTick(dt: number): void {
@@ -889,10 +997,13 @@ export class GameScene {
   // 相机 / 环境粒子 / 震屏
   // ===========================================================
   private computeZoom(): number {
-    const base = Math.min(this.W, this.H) / 600; // tier1 时短边约见 600 世界像素
-    const tierF = 1 / (1 + (this.tier - 1) * 0.13); // 升档镜头微微拉远
+    // 以 390px 短边为基准：T1 ≈2.9（开局鱼够大），指数平滑到 T8 ≈0.45
+    const base = Math.min(this.W, this.H) / ZOOM_BASE_SHORT;
+    const tierF = ZOOM_T1 * Math.pow(ZOOM_T8 / ZOOM_T1, (this.tier - 1) / 7);
     const lumi = this.opts.player.id === 'lumi' ? 1 / 1.12 : 1; // 灯笼被动：视野+12%
-    return clamp(base * tierF * lumi, 0.22, 2.2);
+    let z = base * tierF * lumi;
+    if (this.dashZoomT > 0) z *= 1 + DASH_ZOOM * (this.dashZoomT / DASH_T); // 冲刺推镜
+    return clamp(z, 0.2, 3.4);
   }
 
   private updateCamera(dt: number): void {
@@ -900,7 +1011,7 @@ export class GameScene {
     this.cam.x += (this.px - this.cam.x) * k;
     this.cam.y += (this.py - this.cam.y) * k;
     const tz = this.computeZoom();
-    this.cam.zoom += (tz - this.cam.zoom) * Math.min(1, 1.6 * dt);
+    this.cam.zoom += (tz - this.cam.zoom) * Math.min(1, 2.0 * dt);
     if (this.shakeT > 0) this.shakeT -= dt;
   }
 
@@ -969,8 +1080,8 @@ export class GameScene {
     const sk = this.opts.player.skill;
     let progress = 1;
     if (this.tier < 8) {
-      const lo = TIER_SIZE[this.tier] * TIER_SIZE[this.tier] * TIER_UP_MASS_FACTOR;
-      const hi = TIER_SIZE[(this.tier + 1) as Tier] * TIER_SIZE[(this.tier + 1) as Tier] * TIER_UP_MASS_FACTOR;
+      const lo = this.tierThreshold(this.tier);
+      const hi = this.tierThreshold((this.tier + 1) as Tier);
       progress = clamp((this.mass - lo) / (hi - lo), 0, 1);
     }
     const buffs: HudState['buffs'] = [];
