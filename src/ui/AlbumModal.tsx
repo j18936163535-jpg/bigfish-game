@@ -1,8 +1,7 @@
 // =============================================================
 // 大鱼吃小鱼 · 鱼图鉴弹窗
-// 已发现：图片 + 名称 + 简介；未发现：剪影 + ???。
-// 契约适配说明：FishSpec 无 desc 字段，简介由 tier/behavior 本地生成
-// （契约缺口，已在报告注明，待内容代理补充后可平滑替换）。
+// 已发现：图片 + 名称 + 简介（FishSpec.desc，QA 补充的契约扩展）；
+// 未发现：剪影 + ???。desc 缺失时回退 tier/behavior 本地生成。
 // =============================================================
 import { useState } from 'react';
 import { audio } from '../game/audio';
@@ -99,8 +98,8 @@ export default function AlbumModal({ discovered, onClose }: AlbumModalProps) {
                 </div>
                 <div className="mt-0.5 min-h-7 px-1 text-[9px] leading-tight text-[#7d98a0]">
                   {found
-                    ? `第${f.tier}档 · ${BEHAVIOR_TEXT[f.behavior]}${
-                        f.special === 'rainbow' ? ' · 吃掉触发狂暴！' : ''
+                    ? `${f.desc ?? `第${f.tier}档 · ${BEHAVIOR_TEXT[f.behavior]}`}${
+                        f.special === 'rainbow' ? ' 吃掉触发狂暴！' : ''
                       }`
                     : '尚未在深海中遇见'}
                 </div>

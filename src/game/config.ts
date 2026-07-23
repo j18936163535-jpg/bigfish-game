@@ -6,12 +6,18 @@ import type { Tier } from './types';
 export const TIER_SIZE: Record<Tier, number> = {1:12,2:20,3:33,4:54,5:89,6:147,7:243,8:400};
 export const RAINBOW_DURATION = 10;
 export const COMBO_WINDOW = 3;
-export const EAT_RATIO = 0.9;      // 可吃: prey.size < my.size*EAT_RATIO
+export const EAT_RATIO = 0.95;     // 可吃: prey.size < my.size*EAT_RATIO（QA 0.9→0.95：T1 开局口粮不再稀缺）
 export const DANGER_RATIO = 1.15;  // 危险: size > my.size*DANGER_RATIO
 export const SPAWN_AHEAD = 900;    // 相机外生成环半径
 export const MAX_NPC = 42;         // 同屏上限
 export const RAINBOW_BASE_WEIGHT = 0.35; // 相对权重, 极低
 export const SAVE_KEY = 'bigfish.save.v1';
+
+// QA 平衡（起步宽限）：开局 GRACE_PERIOD 秒内 chase 鱼不主动追、
+// 大型 dart 鱼不瞄准玩家；宽限结束后压迫感在 GRACE_RAMP 秒内
+// 从低位爬坡到满值，并随玩家 tier 提升继续增强（见 scene）。
+export const GRACE_PERIOD = 12;    // 开局宽限秒数
+export const GRACE_RAMP = 45;      // 宽限后压迫感爬坡时长(s)
 
 // 成长框架（plan.md §6 末段）：
 // 吃 tier t 的鱼得质量 m = size²×0.12；玩家当前质量达 TIER_SIZE[t+1]²×3 时升档

@@ -13,6 +13,8 @@ export interface FishSpec {
   sprite: string; facing: 'left'|'right';
   coins: number; score: number; xp: number;
   minPlayerTier: Tier; special?: 'rainbow';
+  /** 图鉴一句话简介（QA 补充的小契约扩展，可选）。 */
+  desc?: string;
 }
 
 export interface SkillDef {

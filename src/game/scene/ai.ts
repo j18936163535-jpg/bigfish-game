@@ -16,7 +16,9 @@ export interface AiCtx {
   magnet: number;               // >0：磁铁半径（1-2 档小鱼被吸向玩家）
   vortex: number;               // >0：吞噬漩涡半径（可吃鱼被直接吸入）
   hourglass: boolean;           // 沙漏：全场鱼速 -55%
-  chaseRange: number;           // chase 感知圈（≈420px）
+  chaseRange: number;           // chase 感知圈（≈420px，由场景按宽限/tier 缩放）
+  grace: boolean;               // 开局宽限期：chase 不追、危险 dart 不瞄准
+  predAim: number;              // 危险 dart 鱼瞄准玩家的概率（宽限期为 0，随时间爬坡）
 }
 
 /** 平滑转向（最短弧插值） */
@@ -107,10 +109,10 @@ export function updateNpc(n: Npc, dt: number, c: AiCtx, rand: () => number): voi
         }
         break;
       case 'chase':
-        if (c.playerVisible && c.playerSize < n.size && dist < c.chaseRange) {
-          // 比它小的进入感知圈 → 追击
+        if (!c.grace && c.playerVisible && c.playerSize < n.size && dist < c.chaseRange) {
+          // 比它小的进入感知圈 → 追击（速度压迫感随自身 tier 渐强）
           n.tdir = Math.atan2(uy, ux);
-          speed *= 1.12;
+          speed *= 1.06 + 0.01 * (n.spec.tier - 1);
           turnRate = 5.5;
         } else if (c.playerVisible && edible && dist < 260) {
           // 玩家反过来比它大且贴近 → 逃
@@ -126,7 +128,12 @@ export function updateNpc(n: Npc, dt: number, c: AiCtx, rand: () => number): voi
         if (n.dartT <= 0) {
           n.dartT = 1.8 + rand() * 2.6;
           n.stateT = 0.45; // 突进窗口
-          n.tdir = (c.playerVisible && dist < 520 && rand() < 0.5)
+          // 可吃的小鱼突进有 50% 冲向玩家（送上门）；比玩家大的危险鱼
+          // 瞄准概率由 predAim 控制（宽限期 0，随时间爬坡，压迫感渐强）
+          const aimP = !c.playerVisible || dist >= 520 ? 0
+            : edible ? 0.5
+            : c.predAim;
+          n.tdir = rand() < aimP
             ? Math.atan2(uy, ux)
             : rand() * Math.PI * 2;
         }

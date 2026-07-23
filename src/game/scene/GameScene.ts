@@ -19,6 +19,7 @@ import { pickups } from '../data/items';
 import {
   TIER_SIZE, RAINBOW_DURATION, COMBO_WINDOW, EAT_RATIO, DANGER_RATIO,
   SPAWN_AHEAD, MAX_NPC, MASS_PER_SIZE_SQ, TIER_UP_MASS_FACTOR,
+  GRACE_PERIOD, GRACE_RAMP,
 } from '../config';
 import type {
   HudState, PickupDef, PlayerFishSpec, RunModifiers, RunResult, Tier,
@@ -30,8 +31,8 @@ import { updateNpc, type AiCtx } from './ai';
 // -------------------------------------------------------------
 // 局部数值微调（plan §6 允许玩法代理在框架内微调）
 // -------------------------------------------------------------
-/** 质量放大系数：保证 3-6 分钟一局可到 tier 4-5（每档约 14 条同级鱼） */
-const GROWTH_BOOST = 3;
+/** 质量放大系数：保证 3-6 分钟一局可到 tier 4-5（QA 3→4→4.5：实测节奏校准） */
+const GROWTH_BOOST = 4.5;
 const EAT_ANIM = 0.25;        // 猎物吸入动画时长(s)
 const CHASE_RANGE = 420;      // chase 感知圈(px)
 const DESPAWN_R = SPAWN_AHEAD + 1000; // 离屏过远回收半径
@@ -227,6 +228,21 @@ export class GameScene {
 
     audio.unlock();
     audio.startBgm();
+
+    // QA 实测钩子（仅 URL 带 ?qa=1 时启用）：只读快照，供无头测试脚本
+    // 采样玩家/NPC 位置以模拟"会追小鱼、会躲大鱼"的中等水平操作。
+    if (typeof window !== 'undefined' && /[?&]qa=1\b/.test(window.location.search)) {
+      (window as unknown as { __qa?: { snap(): unknown } }).__qa = {
+        snap: () => ({
+          px: this.px, py: this.py, size: this.size, tier: this.tier,
+          runTime: Math.round(this.runTime * 10) / 10,
+          dead: this.dead, kills: this.kills, score: this.score,
+          npcs: this.npcs
+            .filter((n) => !n.dead && n.eaten < 0)
+            .map((n) => ({ x: Math.round(n.x), y: Math.round(n.y), size: Math.round(n.size * 10) / 10 })),
+        }),
+      };
+    }
 
     this.running = true;
     this.lastTs = 0;
@@ -832,6 +848,13 @@ export class GameScene {
   // ===========================================================
   private updateNpcs(dt: number): void {
     const alive = !this.dead;
+    // 起步宽限与压迫感爬坡（QA 平衡，config.GRACE_PERIOD/GRACE_RAMP）：
+    //  - 宽限期内 chase 完全不追、危险 dart 不瞄准；
+    //  - 宽限后 chaseRange 从 55% 爬坡到满值、predAim 从 0.12 爬坡到 0.34；
+    //  - 满值后再乘 tier 系数（0.85 + 0.03/档）：玩家越大，压迫越强。
+    const grace = this.runTime < GRACE_PERIOD;
+    const press = clamp((this.runTime - GRACE_PERIOD) / GRACE_RAMP, 0, 1);
+    const tierPress = 0.85 + (this.tier - 1) * 0.03;
     const ctx: AiCtx = {
       px: this.px, py: this.py,
       playerSize: this.effSize(),
@@ -841,7 +864,9 @@ export class GameScene {
       magnet: this.magnetT > 0 && alive ? MAGNET_R : 0,
       vortex: this.vortexT > 0 && alive ? VORTEX_R : 0,
       hourglass: this.hourglassT > 0,
-      chaseRange: CHASE_RANGE,
+      chaseRange: CHASE_RANGE * (0.55 + 0.45 * press) * tierPress,
+      grace,
+      predAim: grace ? 0 : 0.12 + 0.22 * press,
     };
     const mx = this.px + Math.cos(this.ang) * this.size;
     const my = this.py + Math.sin(this.ang) * this.size;
