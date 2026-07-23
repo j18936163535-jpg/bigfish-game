@@ -25,7 +25,7 @@ import type {
   HudState, PickupDef, PlayerFishSpec, RunModifiers, RunResult, Tier,
 } from '../types';
 import { FxPool, drawSeaBackground } from './fx';
-import { countBig, makeNpc, pickSpec, type Npc } from './spawner';
+import { makeNpc, pickSpec, pickThreatSpec, type Npc } from './spawner';
 import { updateNpc, type AiCtx } from './ai';
 
 // -------------------------------------------------------------
@@ -49,10 +49,12 @@ const DASH_T = 0.9;
 const DASH_BOOST = 3.5;      // 正常速度之外附加的初速倍率（合计 ≈4.5×）
 const DASH_DECAY = 3.2;      // 指数衰减系数：0.9s 末附加速度≈0.2×
 const DASH_ZOOM = 0.07;      // 冲刺推镜幅度
-// 相机变焦曲线（QA 手感）：T1 ≈2.9（T1 玩家鱼在 390×844 屏上视觉直径≥90px），
-// 指数平滑过渡到 T8 ≈0.45（高 tier 视野不变），以 390px 短边为基准缩放。
-const ZOOM_T1 = 2.9;
-const ZOOM_T8 = 0.45;
+// 相机变焦（难度设计师重做）：按玩家当前实际体型（质量插值的连续半径）
+// 幂律连续变焦，全程无 tier 跳变。size 升 → zoom 缓降：
+//   玩家屏幕占比 ∝ size^(1-0.53)=size^0.47（缓慢增长），
+//   视野半径 ∝ 1/zoom ∝ size^0.53（增长更快）——鱼越大看到的世界越大。
+const ZOOM_T1 = 2.9;         // size=12（T1 起步体型）时的基准变焦
+const ZOOM_SIZE_EXP = 0.53;  // 幂指数：占比与视野增速的分配
 const ZOOM_BASE_SHORT = 390;
 // 升档阈值分段提速（QA 手感：低 tier 明显加快，高 tier 不变）：
 // 阈值 = TIER_SIZE[t]² × TIER_UP_MASS_FACTOR × TIER_THRESHOLD_MUL[t]
@@ -262,7 +264,11 @@ export class GameScene {
           zoom: Math.round(this.cam.zoom * 1000) / 1000,
           npcs: this.npcs
             .filter((n) => !n.dead && n.eaten < 0)
-            .map((n) => ({ x: Math.round(n.x), y: Math.round(n.y), size: Math.round(n.size * 10) / 10 })),
+            .map((n) => ({
+              id: n.spec.id, bh: n.spec.behavior,
+              x: Math.round(n.x), y: Math.round(n.y), size: Math.round(n.size * 10) / 10,
+              wu: Math.round(n.windupT * 100) / 100, lu: Math.round(n.lungeT * 100) / 100,
+            })),
         }),
         // 测试注入：按道具 id 直接触发（磁铁吃鱼回归测试用），仅 ?qa=1 生效
         give: (id: string) => {
@@ -368,8 +374,9 @@ export class GameScene {
     this.updateAmbient(dt);
     this.updateCamera(dt);
 
-    // 离屏过远回收 + 移除死体
-    const d2r = DESPAWN_R * DESPAWN_R;
+    // 离屏过远回收（随视野动态外推，保证"视野外远环"之外的鱼被及时回收）
+    const despawnR = Math.max(DESPAWN_R, this.viewRadius() * 2.6 + 500);
+    const d2r = despawnR * despawnR;
     this.npcs = this.npcs.filter((n) => {
       if (n.dead) return false;
       const dx = n.x - this.px;
@@ -871,47 +878,98 @@ export class GameScene {
 
   private initialSpawn(): void {
     let guard = 0;
-    while (this.npcs.length < 30 && guard++ < 300) {
-      const spec = pickSpec(this.tier, 0, this.opts.mods.rainbowMul);
+    while (this.npcs.length < 26 && guard++ < 300) {
+      const spec = pickSpec({
+        playerTier: this.tier, threatCount: 0, threatCap: 2,
+        threatShare: 0.16, rainbowMul: this.opts.mods.rainbowMul,
+      });
       if (!spec) break;
       const a = Math.random() * Math.PI * 2;
       if (spec.tier > this.tier && spec.special !== 'rainbow') {
         // 大鱼不贴在出生点刷
-        const r = 700 + Math.random() * 500;
+        const r = 620 + Math.random() * 420;
         this.npcs.push(makeNpc(spec, this.px + Math.cos(a) * r, this.py + Math.sin(a) * r));
       } else {
-        const r = 260 + Math.random() * 900;
+        const r = 220 + Math.random() * 760;
         // 近处鱼体型偏小：保证开局必有可吃的鱼
-        const near = r < 560;
+        const near = r < 500;
         this.npcs.push(makeNpc(
           spec, this.px + Math.cos(a) * r, this.py + Math.sin(a) * r,
           near ? { minMul: 0.7, maxMul: 0.85 } : undefined,
         ));
       }
     }
-    // QA 手感：相机放大后视野很小（T1 可见半径≈70×150 世界px），
-    // 开局口粮必须有一部分直接在视野内，另一部分在紧邻外圈
-    for (let i = 0; i < 3; i++) this.spawnFoodNear(80, 150);
-    for (let i = 0; i < 4; i++) this.spawnFoodNear(150, 280);
-    for (let i = 0; i < 3; i++) this.spawnFoodNear(280, 500);
+    // T1 起危险鱼常存：开局即放 1 条大 1-2 档的威胁鱼在视野边缘游荡（红轮廓可见）
+    const threat = pickThreatSpec(this.tier);
+    if (threat) {
+      const a = Math.random() * Math.PI * 2;
+      const r = 290 + Math.random() * 150;
+      this.npcs.push(makeNpc(threat, this.px + Math.cos(a) * r, this.py + Math.sin(a) * r));
+    }
+    // 开局口粮：一部分直接在视野内，另一部分在紧邻外圈
+    for (let i = 0; i < 4; i++) this.spawnFoodNear(80, 150);
+    for (let i = 0; i < 5; i++) this.spawnFoodNear(150, 280);
+    for (let i = 0; i < 4; i++) this.spawnFoodNear(280, 500);
   }
 
+  /**
+   * 密度按"可见区"维持（难度设计师重做）：
+   * 任何时刻视野内活跃 NPC 保持 12-18 条（随 tier 缩放），不足即在视野
+   * 外缘近环补刷；危险鱼常存 1-3 条（随难度标量 D），杜绝空屏与无威胁。
+   */
   private spawnTick(dt: number): void {
     this.spawnT -= dt;
     if (this.spawnT > 0) return;
-    this.spawnT = 0.4;
-    let alive = 0;
-    for (const n of this.npcs) if (!n.dead && n.eaten < 0) alive++;
-    if (alive >= MAX_NPC) return;
-    const spec = pickSpec(this.tier, countBig(this.npcs, this.tier), this.opts.mods.rainbowMul);
-    if (!spec) return;
-    // 生成环：SPAWN_AHEAD 之外
-    const a = Math.random() * Math.PI * 2;
-    const r = SPAWN_AHEAD + Math.random() * 350;
-    this.npcs.push(makeNpc(spec, this.px + Math.cos(a) * r, this.py + Math.sin(a) * r));
+    this.spawnT = 0.35;
 
-    // QA 手感：低 tier 近场口粮保底——相机放大后视野小，
-    // 380px 内可吃鱼少于 4 条时持续补投到视野边缘（每次 1 条，避免爆屏）
+    const visR = this.viewRadius() * 1.08;
+    const visR2 = visR * visR;
+    let alive = 0;
+    let visible = 0;
+    let threats = 0;
+    for (const n of this.npcs) {
+      if (n.dead || n.eaten >= 0) continue;
+      alive++;
+      const dx = n.x - this.px;
+      const dy = n.y - this.py;
+      if (dx * dx + dy * dy < visR2) visible++;
+      if (this.threatens(n)) threats++;
+    }
+    if (alive >= MAX_NPC) return;
+    const diff = this.difficulty();
+    const targetVis = Math.min(18, 11 + this.tier); // 12-18 随 tier 缩放
+
+    // 1) 视野密度维持：不足即补到视野外缘近环（每次最多 3 条防爆屏）
+    let spawned = 0;
+    while (visible < targetVis && alive < MAX_NPC && spawned < 3) {
+      const spec = pickSpec({
+        playerTier: this.tier,
+        threatCount: threats,
+        threatCap: 1 + Math.round(2 * diff),
+        threatShare: 0.12 + 0.1 * diff,
+        rainbowMul: this.opts.mods.rainbowMul,
+      });
+      if (!spec) break;
+      const a = Math.random() * Math.PI * 2;
+      const r = visR + 30 + Math.random() * 220;
+      this.npcs.push(makeNpc(spec, this.px + Math.cos(a) * r, this.py + Math.sin(a) * r));
+      visible++; alive++; spawned++;
+      if (spec.tier > this.tier && spec.special !== 'rainbow') threats++;
+    }
+
+    // 2) 危险鱼常存保底：1-3 条（开局即 1 条，D 爬升后至多 3 条）在附近游荡
+    const threatCap = this.runTime < 8 ? 1 : 1 + Math.round(2.2 * diff);
+    if (threats < threatCap && alive < MAX_NPC) {
+      const spec = pickThreatSpec(this.tier);
+      if (spec) {
+        const a = Math.random() * Math.PI * 2;
+        const r = visR + 90 + Math.random() * 260;
+        this.npcs.push(makeNpc(spec, this.px + Math.cos(a) * r, this.py + Math.sin(a) * r));
+        alive++;
+      }
+    }
+
+    // 3) 低 tier 近场口粮保底：380px 内可吃鱼少于 4 条时持续补投
     if (this.tier <= 2) {
       let nearFood = 0;
       for (const n of this.npcs) {
@@ -956,15 +1014,17 @@ export class GameScene {
   // ===========================================================
   private updateNpcs(dt: number): void {
     const alive = !this.dead;
-    // 起步宽限与压迫感爬坡（QA 平衡，config.GRACE_PERIOD/GRACE_RAMP）：
-    //  - 宽限期内 chase 完全不追、危险 dart 不瞄准；
-    //  - 宽限后 chaseRange 从 55% 爬坡到满值、predAim 从 0.12 爬坡到 0.34；
-    //  - 满值后再乘 tier 系数（0.85 + 0.03/档）：玩家越大，压迫越强。
+    // 难度爬坡（难度设计师重做）：
+    //  - 宽限期内 chase 不追不冲、危险 dart 几乎不瞄准（但威胁鱼已在场游荡）；
+    //  - 宽限后连续难度标量 D=f(存活时间,tier) 0→1 爬升，控制感知圈、
+    //    瞄准概率与冲刺频率/速度/前摇（冲刺参数见 ai.ts）。
     const grace = this.runTime < GRACE_PERIOD;
     const press = clamp((this.runTime - GRACE_PERIOD) / GRACE_RAMP, 0, 1);
     const tierPress = 0.85 + (this.tier - 1) * 0.03;
+    const diff = this.difficulty();
     const ctx: AiCtx = {
       px: this.px, py: this.py,
+      pvx: this.pvx, pvy: this.pvy,
       playerSize: this.effSize(),
       playerVisible: this.cloakT <= 0 && alive,
       canPlayerEat: (n) => this.canEat(n),
@@ -972,9 +1032,11 @@ export class GameScene {
       magnet: this.magnetT > 0 && alive ? MAGNET_R : 0,
       vortex: this.vortexT > 0 && alive ? VORTEX_R : 0,
       hourglass: this.hourglassT > 0,
-      chaseRange: CHASE_RANGE * (0.55 + 0.45 * press) * tierPress,
+      chaseRange: CHASE_RANGE * (0.55 + 0.45 * press) * tierPress * (1 + 0.25 * diff),
       grace,
-      predAim: grace ? 0 : 0.12 + 0.22 * press,
+      earlyCalm: this.runTime < 30,
+      predAim: grace ? 0.03 : (0.08 + 0.3 * diff) * (0.45 + 0.55 * press),
+      diff,
     };
     const mx = this.px + Math.cos(this.ang) * this.size;
     const my = this.py + Math.sin(this.ang) * this.size;
@@ -997,13 +1059,25 @@ export class GameScene {
   // 相机 / 环境粒子 / 震屏
   // ===========================================================
   private computeZoom(): number {
-    // 以 390px 短边为基准：T1 ≈2.9（开局鱼够大），指数平滑到 T8 ≈0.45
+    // 以 390px 短边为基准；随连续体型幂律缩放（T8 体型 400 时 ≈0.45，与旧曲线末段一致）
     const base = Math.min(this.W, this.H) / ZOOM_BASE_SHORT;
-    const tierF = ZOOM_T1 * Math.pow(ZOOM_T8 / ZOOM_T1, (this.tier - 1) / 7);
+    const sizeF = Math.pow(Math.max(8, this.size) / TIER_SIZE[1], -ZOOM_SIZE_EXP);
     const lumi = this.opts.player.id === 'lumi' ? 1 / 1.12 : 1; // 灯笼被动：视野+12%
-    let z = base * tierF * lumi;
+    let z = base * ZOOM_T1 * sizeF * lumi;
     if (this.dashZoomT > 0) z *= 1 + DASH_ZOOM * (this.dashZoomT / DASH_T); // 冲刺推镜
     return clamp(z, 0.2, 3.4);
+  }
+
+  /** 当前视野半径（世界 px，半对角线）：密度维持/生成环/回收都以此为准 */
+  private viewRadius(): number {
+    return Math.hypot(this.W, this.H) / (2 * Math.max(0.2, this.cam.zoom));
+  }
+
+  /** 连续难度标量 D ∈ [0,1]：f(存活时间, 玩家tier)，控制威胁上限/感知圈/冲刺/生成表 */
+  private difficulty(): number {
+    const timeD = clamp((this.runTime - 15) / 150, 0, 1); // 开局 15s 宽限，165s 爬满
+    const tierD = (this.tier - 1) / 7;
+    return clamp(0.6 * timeD + 0.4 * tierD, 0, 1);
   }
 
   private updateCamera(dt: number): void {
@@ -1170,8 +1244,17 @@ export class GameScene {
         continue;
       }
       if (this.threatens(n)) this.drawDangerRing(ctx, n, t);
-      const alpha = n.stun > 0 ? 0.7 + 0.2 * Math.sin(t * 10) : 1;
-      this.renderer.draw(ctx, n.spec, n.x, n.y, n.size, dirX, t + n.phase, { alpha });
+      // 潜伏-冲刺前摇：身体抖动 + 白红闪光（明确的"快躲"信号）
+      let jx = 0;
+      let jy = 0;
+      let alpha = n.stun > 0 ? 0.7 + 0.2 * Math.sin(t * 10) : 1;
+      if (n.windupT > 0) {
+        jx = (Math.random() * 2 - 1) * 2.6;
+        jy = (Math.random() * 2 - 1) * 2.6;
+        alpha = 0.75 + 0.25 * Math.sin(t * 30);
+        this.drawWindupGlow(ctx, n, t);
+      }
+      this.renderer.draw(ctx, n.spec, n.x + jx, n.y + jy, n.size, dirX, t + n.phase, { alpha });
       if (n.stun > 0) this.drawStunMarks(ctx, n, t);
     }
 
@@ -1240,6 +1323,20 @@ export class GameScene {
     ctx.shadowBlur = 14;
     ctx.beginPath();
     ctx.arc(n.x, n.y, n.size * 1.5, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /** 冲刺前摇提示：高频白红闪光环 + 内圈白光，比常驻红轮廓更刺眼 */
+  private drawWindupGlow(ctx: CanvasRenderingContext2D, n: Npc, t: number): void {
+    ctx.save();
+    ctx.globalAlpha = 0.45 + 0.35 * Math.sin(t * 26 + n.phase);
+    ctx.strokeStyle = '#ffd9c9';
+    ctx.lineWidth = 4;
+    ctx.shadowColor = 'rgba(255,120,80,0.95)';
+    ctx.shadowBlur = 22;
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, n.size * 1.7, 0, Math.PI * 2);
     ctx.stroke();
     ctx.restore();
   }

@@ -22,6 +22,11 @@ export interface Npc {
   dartT: number;         // 突进间隔计时
   stun: number;          // 麻痹剩余秒数
   scared: number;        // 受惊强制逃跑剩余秒数
+  windupT: number;       // 潜伏-冲刺：前摇剩余秒数（>0 减速蓄力）
+  lungeT: number;        // 冲刺剩余秒数（>0 锁定预判点突进）
+  fatigueT: number;      // 冲后疲惫剩余秒数（逃跑窗口）
+  lungeCd: number;       // 距下次可冲刺的冷却
+  aimX: number; aimY: number; // 冲刺锁定的预判目标点
   vx: number; vy: number; // 击退速度（衰减）
   eaten: number;         // -1 = 存活；0..1 = 被吸入口中动画进度
   fromX: number; fromY: number; // 吸入动画起点
@@ -48,53 +53,79 @@ export function makeNpc(spec: FishSpec, x: number, y: number, opts?: MakeNpcOpts
     stateT: 1 + Math.random() * 2,
     dartT: 1 + Math.random() * 2,
     stun: 0, scared: 0, vx: 0, vy: 0,
+    windupT: 0, lungeT: 0, fatigueT: 0,
+    lungeCd: 1.5 + Math.random() * 3,
+    aimX: x, aimY: y,
     eaten: -1, fromX: x, fromY: y,
     dead: false,
   };
 }
 
-/** 同屏大鱼（tier > 玩家）数量上限：制造压迫感但克制 */
-export const BIG_CAP = 3;
+/**
+ * 混合生成表（难度设计师重做）：约 55% 可吃 / 25% 同档争抢 / 20% 威胁。
+ * 威胁占比由 threatShare 控制（场景按难度标量 D 在 0.12-0.22 间浮动），
+ * 同屏威胁数达 threatCap 后普通生成不再出大鱼（威胁由场景定向补刷保底）。
+ */
+export interface PickSpecOpts {
+  playerTier: Tier;
+  threatCount: number;
+  threatCap: number;
+  threatShare: number;   // 威胁桶目标占比（0.12-0.22）
+  rainbowMul: number;
+  randFn?: () => number;
+}
 
-export function countBig(npcs: Npc[], playerTier: Tier): number {
-  let c = 0;
-  for (const n of npcs) {
-    if (!n.dead && n.eaten < 0 && n.spec.tier > playerTier) c++;
+export function pickSpec(o: PickSpecOpts): FishSpec | null {
+  const randFn = o.randFn ?? Math.random;
+  const pool: { spec: FishSpec; w: number }[] = [];
+  let total = 0;
+  const threatW = 0.9 * Math.max(0, o.threatShare) / 0.2; // D=满 → 每桶条约 0.9
+  for (const spec of fish) {
+    let w = 0;
+    if (spec.special === 'rainbow') {
+      w = RAINBOW_BASE_WEIGHT * Math.max(0, o.rainbowMul);
+    } else {
+      if (spec.minPlayerTier > o.playerTier + 1) continue;
+      const d = spec.tier - o.playerTier;
+      if (d < 0) {
+        w = d >= -2 ? 1.8 : 1.2;                 // 可吃桶
+      } else if (d === 0) {
+        w = 1.3;                                  // 同档争抢桶
+      } else {
+        if (o.threatCount >= o.threatCap) continue; // 威胁桶
+        w = threatW * (d === 1 ? 1 : 0.6);
+      }
+    }
+    if (w > 0) { pool.push({ spec, w }); total += w; }
   }
-  return c;
+  if (total <= 0) return null;
+  let r = randFn() * total;
+  for (const e of pool) {
+    r -= e.w;
+    if (r <= 0) return e.spec;
+  }
+  return pool[pool.length - 1].spec;
 }
 
 /**
- * 按玩家 tier 加权抽取一个要生成的鱼种。
- * 权重设计（相对权重）：
- *  - 同级鱼 7；低 1/2/3 档 4/3/2（保底 2）；
- *  - 高 1 档 1.1、高 ≥2 档 0.35，且同屏大鱼达 BIG_CAP 后不再生成；
- *  - minPlayerTier > 玩家 tier + 1 的鱼不出现（龙王不会在浅海刷出）；
- *  - 彩虹鱼 = RAINBOW_BASE_WEIGHT × rainbowMul。
+ * 定向抽一条"危险鱼"（比玩家大 1-2 档），用于威胁常存保底。
+ * chase/dart 型权重更高（真的会追），温顺巨物低权重兜底。
  */
-export function pickSpec(
+export function pickThreatSpec(
   playerTier: Tier,
-  bigCount: number,
-  rainbowMul: number,
   randFn: () => number = Math.random,
 ): FishSpec | null {
   const pool: { spec: FishSpec; w: number }[] = [];
   let total = 0;
   for (const spec of fish) {
-    let w = 0;
-    if (spec.special === 'rainbow') {
-      w = RAINBOW_BASE_WEIGHT * Math.max(0, rainbowMul);
-    } else {
-      if (spec.minPlayerTier > playerTier + 1) continue;
-      const d = spec.tier - playerTier;
-      if (d <= 0) {
-        w = d === 0 ? 7 : Math.max(2, 5 + d);
-      } else {
-        if (bigCount >= BIG_CAP) continue;
-        w = d === 1 ? 1.1 : 0.35;
-      }
-    }
-    if (w > 0) { pool.push({ spec, w }); total += w; }
+    if (spec.special === 'rainbow') continue;
+    if (spec.minPlayerTier > playerTier + 1) continue;
+    const d = spec.tier - playerTier;
+    if (d !== 1 && d !== 2) continue;
+    const w = spec.behavior === 'chase' ? 3
+      : spec.behavior === 'dart' ? 2 : 1;
+    pool.push({ spec, w: w * (d === 1 ? 1 : 0.55) });
+    total += w * (d === 1 ? 1 : 0.55);
   }
   if (total <= 0) return null;
   let r = randFn() * total;

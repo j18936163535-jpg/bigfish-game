@@ -8,8 +8,8 @@ export const RAINBOW_DURATION = 10;
 export const COMBO_WINDOW = 3;
 export const EAT_RATIO = 0.95;     // 可吃: prey.size < my.size*EAT_RATIO（QA 0.9→0.95：T1 开局口粮不再稀缺）
 export const DANGER_RATIO = 1.15;  // 危险: size > my.size*DANGER_RATIO
-export const SPAWN_AHEAD = 900;    // 相机外生成环半径
-export const MAX_NPC = 42;         // 同屏上限
+export const SPAWN_AHEAD = 900;    // 生成环最小半径（实际生成环随视野动态外推，见 scene）
+export const MAX_NPC = 70;         // 同屏上限（密度按可见区维持后上调）
 export const RAINBOW_BASE_WEIGHT = 0.35; // 相对权重, 极低
 export const SAVE_KEY = 'bigfish.save.v1';
 
