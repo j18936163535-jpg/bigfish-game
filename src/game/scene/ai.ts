@@ -40,13 +40,13 @@ const turn = (cur: number, target: number, rate: number, dt: number): number => 
 
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
 
-/** 冲刺倍率：2.5-3.2×，tier 与难度越高越快 */
+/** 冲刺倍率：2.6-3.6×，tier 与难度越高越快（用户要求难度翻倍：端点 3.2→3.6） */
 const lungeMul = (n: Npc, diff: number): number =>
-  Math.min(3.2, 2.5 + 0.09 * (n.spec.tier - 1) + 0.3 * diff);
+  Math.min(3.6, 2.6 + 0.1 * (n.spec.tier - 1) + 0.5 * diff);
 
-/** 冲刺冷却：难度/tier 越高冲得越频 */
+/** 冲刺冷却：难度/tier 越高冲得越频（难度翻倍：4.5-2.2D→3.6-2.4D，下限 1.2→0.9） */
 const lungeCooldown = (n: Npc, diff: number, rand: () => number): number =>
-  Math.max(1.2, 4.5 - 2.2 * diff - 0.25 * (n.spec.tier - 1)) + rand() * 0.8;
+  Math.max(0.9, 3.6 - 2.4 * diff - 0.3 * (n.spec.tier - 1)) + rand() * 0.6;
 
 export function updateNpc(n: Npc, dt: number, c: AiCtx, rand: () => number): void {
   // 击退速度持续衰减

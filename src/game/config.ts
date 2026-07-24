@@ -16,8 +16,8 @@ export const SAVE_KEY = 'bigfish.save.v1';
 // QA 平衡（起步宽限）：开局 GRACE_PERIOD 秒内 chase 鱼不主动追、
 // 大型 dart 鱼不瞄准玩家；宽限结束后压迫感在 GRACE_RAMP 秒内
 // 从低位爬坡到满值，并随玩家 tier 提升继续增强（见 scene）。
-export const GRACE_PERIOD = 12;    // 开局宽限秒数
-export const GRACE_RAMP = 45;      // 宽限后压迫感爬坡时长(s)
+export const GRACE_PERIOD = 10;    // 开局宽限秒数（难度翻倍：12→10）
+export const GRACE_RAMP = 30;      // 宽限后压迫感爬坡时长(s)（难度翻倍：45→30）
 
 // 成长框架（plan.md §6 末段）：
 // 吃 tier t 的鱼得质量 m = size²×0.12；玩家当前质量达 TIER_SIZE[t+1]²×3 时升档

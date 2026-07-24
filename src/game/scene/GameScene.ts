@@ -49,12 +49,12 @@ const DASH_T = 0.9;
 const DASH_BOOST = 3.5;      // 正常速度之外附加的初速倍率（合计 ≈4.5×）
 const DASH_DECAY = 3.2;      // 指数衰减系数：0.9s 末附加速度≈0.2×
 const DASH_ZOOM = 0.07;      // 冲刺推镜幅度
-// 相机变焦（难度设计师重做）：按玩家当前实际体型（质量插值的连续半径）
-// 幂律连续变焦，全程无 tier 跳变。size 升 → zoom 缓降：
-//   玩家屏幕占比 ∝ size^(1-0.53)=size^0.47（缓慢增长），
-//   视野半径 ∝ 1/zoom ∝ size^0.53（增长更快）——鱼越大看到的世界越大。
+// 相机变焦：按玩家当前实际体型（质量插值的连续半径）幂律连续变焦，全程无 tier 跳变。
+// 用户真机反馈"后期整个屏幕都是自己"→ 指数 0.53→0.80：
+//   玩家屏幕占比 ∝ size^(1-0.80)=size^0.20（几乎恒定，T8 也只比 T1 大约一倍），
+//   视野半径 ∝ 1/zoom ∝ size^0.80（基本与体型同步扩大）——鱼越大看到的世界越大。
 const ZOOM_T1 = 2.9;         // size=12（T1 起步体型）时的基准变焦
-const ZOOM_SIZE_EXP = 0.53;  // 幂指数：占比与视野增速的分配
+const ZOOM_SIZE_EXP = 0.8;   // 幂指数：占比与视野增速的分配
 const ZOOM_BASE_SHORT = 390;
 // 升档阈值分段提速（QA 手感：低 tier 明显加快，高 tier 不变）：
 // 阈值 = TIER_SIZE[t]² × TIER_UP_MASS_FACTOR × TIER_THRESHOLD_MUL[t]
@@ -937,7 +937,7 @@ export class GameScene {
     }
     if (alive >= MAX_NPC) return;
     const diff = this.difficulty();
-    const targetVis = Math.min(18, 11 + this.tier); // 12-18 随 tier 缩放
+    const targetVis = clamp(Math.round(visR / 130), 12, 26); // 密度随视野面积缩放：视野越大维持越多
 
     // 1) 视野密度维持：不足即补到视野外缘近环（每次最多 3 条防爆屏）
     let spawned = 0;
@@ -945,8 +945,8 @@ export class GameScene {
       const spec = pickSpec({
         playerTier: this.tier,
         threatCount: threats,
-        threatCap: 1 + Math.round(2 * diff),
-        threatShare: 0.12 + 0.1 * diff,
+        threatCap: 1 + Math.round(3 * diff),
+        threatShare: 0.14 + 0.16 * diff,
         rainbowMul: this.opts.mods.rainbowMul,
       });
       if (!spec) break;
@@ -957,8 +957,8 @@ export class GameScene {
       if (spec.tier > this.tier && spec.special !== 'rainbow') threats++;
     }
 
-    // 2) 危险鱼常存保底：1-3 条（开局即 1 条，D 爬升后至多 3 条）在附近游荡
-    const threatCap = this.runTime < 8 ? 1 : 1 + Math.round(2.2 * diff);
+    // 2) 危险鱼常存保底：1-5 条（开局即 1 条，宽限后保底 2 条，D 爬升至多 5 条，难度翻倍）
+    const threatCap = this.runTime < 8 ? 1 : 2 + Math.round(3 * diff);
     if (threats < threatCap && alive < MAX_NPC) {
       const spec = pickThreatSpec(this.tier);
       if (spec) {
@@ -1032,10 +1032,10 @@ export class GameScene {
       magnet: this.magnetT > 0 && alive ? MAGNET_R : 0,
       vortex: this.vortexT > 0 && alive ? VORTEX_R : 0,
       hourglass: this.hourglassT > 0,
-      chaseRange: CHASE_RANGE * (0.55 + 0.45 * press) * tierPress * (1 + 0.25 * diff),
+      chaseRange: CHASE_RANGE * (0.55 + 0.45 * press) * tierPress * (1 + 0.4 * diff),
       grace,
-      earlyCalm: this.runTime < 30,
-      predAim: grace ? 0.03 : (0.08 + 0.3 * diff) * (0.45 + 0.55 * press),
+      earlyCalm: this.runTime < 22,
+      predAim: grace ? 0.05 : (0.1 + 0.45 * diff) * (0.45 + 0.55 * press),
       diff,
     };
     const mx = this.px + Math.cos(this.ang) * this.size;
@@ -1065,19 +1065,20 @@ export class GameScene {
     const lumi = this.opts.player.id === 'lumi' ? 1 / 1.12 : 1; // 灯笼被动：视野+12%
     let z = base * ZOOM_T1 * sizeF * lumi;
     if (this.dashZoomT > 0) z *= 1 + DASH_ZOOM * (this.dashZoomT / DASH_T); // 冲刺推镜
-    return clamp(z, 0.2, 3.4);
+    return clamp(z, 0.14, 3.4);
   }
 
   /** 当前视野半径（世界 px，半对角线）：密度维持/生成环/回收都以此为准 */
   private viewRadius(): number {
-    return Math.hypot(this.W, this.H) / (2 * Math.max(0.2, this.cam.zoom));
+    return Math.hypot(this.W, this.H) / (2 * Math.max(0.14, this.cam.zoom));
   }
 
-  /** 连续难度标量 D ∈ [0,1]：f(存活时间, 玩家tier)，控制威胁上限/感知圈/冲刺/生成表 */
+  /** 连续难度标量 D ∈ [0,1]：f(存活时间, 玩家tier)，控制威胁上限/感知圈/冲刺/生成表。
+      用户要求难度再增加一倍 → 输出 ×2（约 55s 爬满，此前 165s），端点常数同步上调。 */
   private difficulty(): number {
-    const timeD = clamp((this.runTime - 15) / 150, 0, 1); // 开局 15s 宽限，165s 爬满
+    const timeD = clamp((this.runTime - 15) / 70, 0, 1); // 开局 15s 宽限，85s 时间分量爬满（难度翻倍：150→90→70）
     const tierD = (this.tier - 1) / 7;
-    return clamp(0.6 * timeD + 0.4 * tierD, 0, 1);
+    return clamp(2 * (0.6 * timeD + 0.4 * tierD), 0, 1);
   }
 
   private updateCamera(dt: number): void {
