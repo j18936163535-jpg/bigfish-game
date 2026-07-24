@@ -48,6 +48,15 @@ export function getRunModifiers(save: SaveData): RunModifiers {
     startBombs: Math.min(2, lv(save, 'belt')),
     revives: Math.min(2, lv(save, 'totem')),
     comboWindowBonus: 0.6 * Math.min(3, lv(save, 'chain')),
+    // 第三轮新增商品
+    growMul: 1 + 0.08 * Math.min(5, lv(save, 'appetite')),
+    pickupDurationMul: 1 + 0.15 * Math.min(3, lv(save, 'scavenger')),
+    pickupRateMul: 1 + 0.2 * Math.min(3, lv(save, 'sonar')),
+    chestMul: 1 + 0.15 * Math.min(3, lv(save, 'luck')),
+    comboCoinMul: 1 + 0.3 * Math.min(3, lv(save, 'greed')),
+    toughness: 0.05 * Math.min(3, lv(save, 'tough')),
+    dashPowerMul: 1 + 0.12 * Math.min(3, lv(save, 'wake')),
+    skillDurMul: 1 + 0.15 * Math.min(3, lv(save, 'endure')),
   };
 }
 
@@ -99,6 +108,9 @@ export function settleRun(save: SaveData, r: RunResult): SettleResult {
     (r.score * 0.6 + r.duration * 2 + r.maxTier * 15) * mods.xpMul,
   );
   const chest = chestForScore(r.score);
+  // 幸运鳞：宝箱金币与附带经验 +15%/级
+  chest.coins = Math.round(chest.coins * mods.chestMul);
+  chest.bonusXp = Math.round(chest.coins / 2);
 
   const next: SaveData = {
     ...save,

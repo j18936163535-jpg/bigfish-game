@@ -45,6 +45,15 @@ export interface RunModifiers {
   speedMul: number; rainbowMul: number;
   startShield: number; shieldRespawn: number;
   startBombs: number; revives: number; comboWindowBonus: number;
+  // 第三轮内容扩展（新增商店商品）
+  growMul: number;           // 大胃口：吃鱼成长倍率
+  pickupDurationMul: number; // 拾荒者：道具持续时长倍率
+  pickupRateMul: number;     // 声呐：道具刷新率倍率
+  chestMul: number;          // 幸运鳞：宝箱奖励倍率（settleRun 用）
+  comboCoinMul: number;      // 贪婪之口：连吃奖励倍率
+  toughness: number;         // 坚韧鳞片：被吃判定等效体型增益（0.05/级）
+  dashPowerMul: number;      // 流线身体：猛冲冲量倍率
+  skillDurMul: number;       // 持久核心：技能持续时长倍率
 }
 
 export interface RunResult {

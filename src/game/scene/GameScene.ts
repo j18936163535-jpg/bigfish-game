@@ -168,6 +168,9 @@ export class GameScene {
   private magnetT = 0;
   private hourglassT = 0;
   private goldrushT = 0;
+  private rocketT = 0;   // 推进火箭：移速+45%
+  private slipT = 0;     // 顺流：移速+20%
+  private mistT = 0;     // 迷幻水雾：大鱼感知/瞄准减半
   private comboN = 0;
   private comboT = 0;
 
@@ -225,6 +228,7 @@ export class GameScene {
     this.dashT = 0; this.dashZoomT = 0; this.dashTrailT = 0;
     this.lureT = 0; this.spikesT = 0; this.cloakT = 0; this.vortexT = 0;
     this.rainbowT = 0; this.magnetT = 0; this.hourglassT = 0; this.goldrushT = 0;
+    this.rocketT = 0; this.slipT = 0; this.mistT = 0;
     this.comboN = 0; this.comboT = 0;
     this.npcs = []; this.pickups = []; this.orbs = [];
     this.discovered.clear();
@@ -342,6 +346,9 @@ export class GameScene {
     this.magnetT = Math.max(0, this.magnetT - dt);
     this.hourglassT = Math.max(0, this.hourglassT - dt);
     this.goldrushT = Math.max(0, this.goldrushT - dt);
+    this.rocketT = Math.max(0, this.rocketT - dt);
+    this.slipT = Math.max(0, this.slipT - dt);
+    this.mistT = Math.max(0, this.mistT - dt);
     if (this.shieldRegenT > 0) {
       this.shieldRegenT -= dt;
       if (this.shieldRegenT <= 0 && this.shield === 0) this.shield = 1;
@@ -438,6 +445,8 @@ export class GameScene {
     let sp = this.opts.player.baseSpeed * this.opts.mods.speedMul * sizeFactor;
     if (this.opts.player.id === 'volt') sp *= 1.08;      // 电光被动：移速+8%
     if (this.rainbowT > 0) sp *= 1.15;
+    if (this.rocketT > 0) sp *= 1.45;                    // 推进火箭：+45%
+    if (this.slipT > 0) sp *= 1.2;                       // 顺流：+20%
 
     const k = 1 - Math.exp(-8 * dt);
     this.pvx += (iv.x * sp - this.pvx) * k;
@@ -448,7 +457,7 @@ export class GameScene {
     // 猛冲冲量：按下瞬间附加 3.5× 方向初速（合计≈4.5×），0.9s 内指数衰减回正常
     if (this.dashT > 0) {
       const elapsed = DASH_T - this.dashT;
-      const boost = DASH_BOOST * Math.exp(-DASH_DECAY * elapsed);
+      const boost = DASH_BOOST * this.opts.mods.dashPowerMul * Math.exp(-DASH_DECAY * elapsed);
       this.px += this.dashDx * sp * boost * dt;
       this.py += this.dashDy * sp * boost * dt;
       // 速度线拖尾：逆运动方向的流线粒子
@@ -488,7 +497,9 @@ export class GameScene {
 
   /** 玩家有效体型（刺球被动：被吃判定 -12% ⇔ 等效体型 +12%） */
   private effSize(): number {
-    return this.size * (this.opts.player.id === 'spike' ? 1.12 : 1);
+    // 刺球被动 ×1.12；坚韧鳞片（toughness 0.05/级）进一步放大等效体型=更难被吃
+    const spikeMul = this.opts.player.id === 'spike' ? 1.12 : 1;
+    return this.size * spikeMul * (1 + this.opts.mods.toughness);
   }
 
   private canEat(n: Npc): boolean {
@@ -527,12 +538,13 @@ export class GameScene {
     this.comboT = window_;
     if (this.comboN >= 3) audio.play('combo');
 
-    // 金币与分数（mods.coinMul × 金潮 ×2 + 连吃 +n / +n×2）
-    this.coins += Math.round(n.spec.coins * this.coinMulTotal() * this.goldMul()) + this.comboN;
-    this.score += Math.round(n.spec.score * this.goldMul()) + this.comboN * 2;
+    // 金币与分数（mods.coinMul × 金潮 ×2 + 连吃 +n / +n×2，贪婪之口放大连吃奖励）
+    const comboBonus = Math.round(this.comboN * this.opts.mods.comboCoinMul);
+    this.coins += Math.round(n.spec.coins * this.coinMulTotal() * this.goldMul()) + comboBonus;
+    this.score += Math.round(n.spec.score * this.goldMul()) + comboBonus * 2;
 
     // 质量与升档（plan §6：m = size²×0.12，阈值 TIER_SIZE[t+1]²×3）
-    const growMul = GROWTH_BOOST * (this.opts.player.id === 'draco' ? 1.12 : 1); // 龙皇被动：成长+12%
+    const growMul = GROWTH_BOOST * (this.opts.player.id === 'draco' ? 1.12 : 1) * this.opts.mods.growMul; // 龙皇被动+大胃口
     this.addMass(n.size * n.size * MASS_PER_SIZE_SQ * growMul);
 
     // 图鉴发现回调（每条鱼种每局首次）
@@ -717,7 +729,7 @@ export class GameScene {
           this.dashDx = Math.cos(this.ang);
           this.dashDy = Math.sin(this.ang);
         }
-        this.dashT = sk.duration ?? DASH_T;
+        this.dashT = (sk.duration ?? DASH_T) * this.opts.mods.skillDurMul; // 持久核心
         this.dashZoomT = this.dashT;
         this.dashTrailT = 0;
         this.shake(0.16, 3.5);
@@ -742,19 +754,19 @@ export class GameScene {
         break;
       }
       case 'lure': // 诱光：5s 内 320px 内可吃鱼被吸引
-        this.lureT = sk.duration ?? LURE_T;
+        this.lureT = (sk.duration ?? LURE_T) * this.opts.mods.skillDurMul;
         audio.play('skill');
         break;
       case 'spikes': // 棘刺：3s 膨胀，大鱼碰你被弹开逃跑
-        this.spikesT = sk.duration ?? SPIKES_T;
+        this.spikesT = (sk.duration ?? SPIKES_T) * this.opts.mods.skillDurMul;
         audio.play('skill');
         break;
       case 'cloak': // 隐身：4s 大鱼完全丢失目标
-        this.cloakT = sk.duration ?? CLOAK_T;
+        this.cloakT = (sk.duration ?? CLOAK_T) * this.opts.mods.skillDurMul;
         audio.play('skill');
         break;
       case 'vortex': // 吞噬漩涡：400px 内可吃鱼被吸入直接吃掉
-        this.vortexT = VORTEX_T;
+        this.vortexT = VORTEX_T * this.opts.mods.skillDurMul;
         this.fx.ring(this.px, this.py, '#8fd0c9', VORTEX_R, 0.7);
         audio.play('skill');
         break;
@@ -794,21 +806,57 @@ export class GameScene {
   private applyPickup(def: PickupDef): void {
     audio.play('pickup');
     this.fx.burst(this.px, this.py, '#ffe9b0', 14, 170, 0.6, 3);
+    const durMul = this.opts.mods.pickupDurationMul; // 拾荒者：道具时长倍率
     switch (def.id) {
       case 'bomb':
         this.bombs += 1;
         break;
       case 'magnet':
-        this.magnetT = def.duration ?? MAGNET_T;
+        this.magnetT = (def.duration ?? MAGNET_T) * durMul;
         break;
       case 'shield':
         this.shield = Math.min(2, this.shield + 1);
         break;
       case 'hourglass':
-        this.hourglassT = def.duration ?? HOURGLASS_T;
+        this.hourglassT = (def.duration ?? HOURGLASS_T) * durMul;
         break;
       case 'goldrush':
-        this.goldrushT = def.duration ?? GOLDRUSH_T;
+        this.goldrushT = (def.duration ?? GOLDRUSH_T) * durMul;
+        break;
+      case 'rocket':
+        this.rocketT = (def.duration ?? 8) * durMul;
+        audio.play('dash');
+        break;
+      case 'slipstream':
+        this.slipT = (def.duration ?? 14) * durMul;
+        break;
+      case 'ink': { // 墨汁：500px 内大鱼眩晕打转 5s（防御型，不掉金币）
+        let hit = false;
+        for (const n of this.npcs) {
+          if (n.dead || n.eaten >= 0 || !this.threatens(n)) continue;
+          const dx = n.x - this.px;
+          const dy = n.y - this.py;
+          if (dx * dx + dy * dy < 500 * 500) { n.stun = 5; hit = true; }
+        }
+        this.fx.ring(this.px, this.py, '#5a6b72', 500, 0.7);
+        if (hit) audio.play('stun');
+        break;
+      }
+      case 'growth': { // 生长激素：立即 +35% 当前升档进度（满档 +200 分）
+        if (this.tier < 8) {
+          const nt = (this.tier + 1) as Tier;
+          this.addMass(this.tierThreshold(nt) * 0.35);
+        } else {
+          this.score += 200;
+        }
+        this.fx.spark(this.px, this.py, '#b8e6a0', 14, 200, 0.7, 3);
+        break;
+      }
+      case 'pearl': // 珍珠蚌：撒 6 颗金币珠
+        this.dropOrbs(this.px, this.py, 6, 3 + this.tier);
+        break;
+      case 'mist':
+        this.mistT = (def.duration ?? 8) * durMul;
         break;
       default:
         break;
@@ -986,7 +1034,7 @@ export class GameScene {
     this.pickupT -= dt;
     for (const p of this.pickups) p.ttl -= dt;
     if (this.pickupT > 0) return;
-    this.pickupT = 8 + Math.random() * 6;
+    this.pickupT = (8 + Math.random() * 6) / this.opts.mods.pickupRateMul; // 声呐：刷新更频繁
     if (this.pickups.length >= PICKUP_MAX || ALL_PICKUPS.length === 0) return;
     let total = 0;
     for (const d of ALL_PICKUPS) total += Math.max(0, d.weight);
@@ -1032,10 +1080,10 @@ export class GameScene {
       magnet: this.magnetT > 0 && alive ? MAGNET_R : 0,
       vortex: this.vortexT > 0 && alive ? VORTEX_R : 0,
       hourglass: this.hourglassT > 0,
-      chaseRange: CHASE_RANGE * (0.55 + 0.45 * press) * tierPress * (1 + 0.4 * diff),
+      chaseRange: CHASE_RANGE * (0.55 + 0.45 * press) * tierPress * (1 + 0.4 * diff) * (this.mistT > 0 ? 0.5 : 1),
       grace,
       earlyCalm: this.runTime < 22,
-      predAim: grace ? 0.05 : (0.1 + 0.45 * diff) * (0.45 + 0.55 * press),
+      predAim: (grace ? 0.05 : (0.1 + 0.45 * diff) * (0.45 + 0.55 * press)) * (this.mistT > 0 ? 0.5 : 1),
       diff,
     };
     const mx = this.px + Math.cos(this.ang) * this.size;
@@ -1164,6 +1212,9 @@ export class GameScene {
     if (this.magnetT > 0) buffs.push({ id: 'magnet', icon: this.pickupIcon('magnet'), remain: this.magnetT });
     if (this.hourglassT > 0) buffs.push({ id: 'hourglass', icon: this.pickupIcon('hourglass'), remain: this.hourglassT });
     if (this.goldrushT > 0) buffs.push({ id: 'goldrush', icon: this.pickupIcon('goldrush'), remain: this.goldrushT });
+    if (this.rocketT > 0) buffs.push({ id: 'rocket', icon: this.pickupIcon('rocket'), remain: this.rocketT });
+    if (this.slipT > 0) buffs.push({ id: 'slipstream', icon: this.pickupIcon('slipstream'), remain: this.slipT });
+    if (this.mistT > 0) buffs.push({ id: 'mist', icon: this.pickupIcon('mist'), remain: this.mistT });
     if (this.lureT > 0) buffs.push({ id: 'lure', icon: sk.icon, remain: this.lureT });
     if (this.spikesT > 0) buffs.push({ id: 'spikes', icon: sk.icon, remain: this.spikesT });
     if (this.cloakT > 0) buffs.push({ id: 'cloak', icon: sk.icon, remain: this.cloakT });
